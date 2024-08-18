@@ -11,13 +11,14 @@ import re
 import numpy as np
 import open3d as o3d
 import pandas as pd
+from scipy.stats import kurtosis
 
 GREEN = '\033[92m'
 ORANGE = '\033[38;5;208m'
 RED = '\033[91m'
 RESET = '\033[0m'
 
-def main():
+def main(preprocessing, loading, processing, presenting, analyzing):
     '''
     Parameters
     '''
@@ -27,11 +28,11 @@ def main():
     depth_output='./depth_vis'
     segments_output = './segment_vis'
     Zack_img = './assets/transformed_TMFM0126.JPG'
-    maximum_depth = 500 # maximum relative distance from camera to the closest obj in 3D model
+    rescape_output = './rescape_vis'
+    maximum_depth = 500 # maximum relative distance from camera to the closest obj in 3D model 8192
     # 0 - 254 object segment ID, 255 background ID, 256 full image
-    segment_IDs = [256] 
-    Zack_compression_factor = 0.315
-    Zack_top_source_y = 1088 
+    segment_IDs = [256]  # 3
+    Target_compression_factor = 0.315
     # the output from ReScape 
     # {TMFM0126.JPG, 0.315, 1088}, 
     # {PB210074.JPG, 0.295}, 
@@ -45,140 +46,154 @@ def main():
     pre-processing
     create the depth file and segment masks
     '''
-    # Generate image's depth map file
-    # deepit()
-    # Generate image's segment mask
-    # segit()
+    if preprocessing:
+        # Generate image's depth map file
+        deepit()
+        # Generate image's segment mask
+        segit()
+        
+        deepit(img_path='./rescape_vis', outdir='./rescape_vis', encoder= 'vitl')
 
     '''
     loading
     '''
-    # image files
-    if os.path.isfile(img_path):
-        filenames = [img_path]
-    else:
-        filenames = os.listdir(img_path)
-        filenames = [os.path.join(img_path, filename) for filename in filenames if not filename.startswith('.')]
-        filenames.sort()
-    # depth files
-    depfiles = os.listdir(depth_output)
-    depfiles =  [os.path.join(depth_output, depthfile) for depthfile in depfiles if not depthfile.startswith('.')]
-    depfiles.sort()
-    # seg folders
-    segfolders = os.listdir(segments_output)
-    segfolders =  [os.path.join(segments_output, segfolder) for segfolder in segfolders]
-    # load camera parameters
-    intr_coeffs = np.array(pd.read_csv(camera, nrows=3, header=None).values.tolist())
-    with open(camera, mode='r') as file:
-        reader = csv.reader(file)
-        # skip to row 4
-        for row in range(3):
-            next(reader)
-        # read the 1x5 distortion coefficients vector
-        dist_coeffs = np.array([list(map(float, next(reader)))])
+    if loading:
+        # image files
+        if os.path.isfile(img_path):
+            filenames = [img_path]
+        else:
+            filenames = os.listdir(img_path)
+            filenames = [os.path.join(img_path, filename) for filename in filenames if not filename.startswith('.')]
+            filenames.sort()
+        # depth files
+        depfiles = os.listdir(depth_output)
+        depfiles =  [os.path.join(depth_output, depthfile) for depthfile in depfiles if not depthfile.startswith('.')]
+        depfiles.sort()
+        # seg folders
+        segfolders = os.listdir(segments_output)
+        segfolders =  [os.path.join(segments_output, segfolder) for segfolder in segfolders]
+        # load camera parameters
+        intr_coeffs = np.array(pd.read_csv(camera, nrows=3, header=None).values.tolist())
+        with open(camera, mode='r') as file:
+            reader = csv.reader(file)
+            # skip to row 4
+            for row in range(3):
+                next(reader)
+            # read the 1x5 distortion coefficients vector
+            dist_coeffs = np.array([list(map(float, next(reader)))])
 
     '''
     processing
     '''
-    for filename in filenames:
-        # load image
-        color_image = Image.open(filename).convert('RGB')  # Convert to RGB if needed
-        _, file_with_extension = os.path.split(filename)
-        file_name, _ = os.path.splitext(file_with_extension)
-        imgID = file_name
-        # load depth file
-        depth_file = [s for s in depfiles if imgID in s]
-        if len(depth_file) !=1:
-            print(f"{RED} multi depth files are found.{RESET}")    
-        # load segment folder
-        seg_folder = [s for s in segfolders if imgID in s]
-        # Convert the images to NumPy arrays
-        color_np = np.asarray(color_image, dtype=np.uint8)
-        depth_map_array  = np.loadtxt(depth_file[0])
-        depth_np = np.asarray(depth_map_array, dtype=np.uint16)
-        # inverse the depth value
-        depth_np = np.max(depth_np) - depth_np
+    if processing:
+        for filename in filenames:
+            # load image
+            color_image = Image.open(filename).convert('RGB')  # Convert to RGB if needed
+            _, file_with_extension = os.path.split(filename)
+            file_name, _ = os.path.splitext(file_with_extension)
+            imgID = file_name
+            # load depth file
+            depth_file = [s for s in depfiles if imgID in s]
+            if len(depth_file) !=1:
+                print(f"{RED} multi depth files are found.{RESET}")    
+            # load segment folder
+            seg_folder = [s for s in segfolders if imgID in s]
+            # Convert the images to NumPy arrays
+            color_np = np.asarray(color_image, dtype=np.uint8)
+            depth_map_array  = np.loadtxt(depth_file[0])
+            depth_np = np.asarray(depth_map_array, dtype=np.uint16)
 
-        # distance regression
-        return_result = depth_bruteforce(color_np, depth_np, maximum_depth, color_image, Zack_img, Zack_top_source_y, intr_coeffs)
-        return_result = np.array(return_result)
+            # # Plot the depth map
+            # plt.imshow(depth_np, cmap='viridis', interpolation='none')
+            # plt.show()
 
-    '''
-    presenting
-    '''
-    present_bf_result(return_result, imgID)
+            # inverse the depth value
+            depth_np = np.max(depth_np) - depth_np
+
+            # distance regression
+            return_result = depth_bruteforce(color_np, depth_np, maximum_depth, color_image, intr_coeffs)
+            return_result = np.array(return_result)
+
+            '''
+            presenting
+            '''
+            if presenting:
+                present_bf_result(return_result, Target_compression_factor, imgID)
+                # best_depth = return_result[np.argmax(return_result[:, 1]), 0] # best_depth = 180
+                best_depth = return_result[find_closest_index(return_result, Target_compression_factor), 0]
+
+                depth_np = np.asarray(depth_np + best_depth, dtype=np.uint16)
+
+                # Masking
+                # color_np, depth_np = masking(color_np, depth_np, seg_folder[0], segment_IDs)    
+
+                pcd = create_pcd(depth_np, color_np, intr_coeffs, maximum_depth)
+                present_pcd(pcd)
+
+                # pcd_rotated_transformed, rotation_matrix = rotate_camera(pcd)
+
+                # compare_topdownview(pcd, color_image, Zack_img)
+                
+                # # create top down view
+                # combined_array = inverse_project(depth_np, color_np, rotation_matrix)
+                # project_top_view(combined_array)
+
+                # Load a point cloud from a PLY file
+
+                present_pcd_series()
     
-    best_depth = return_result[np.argmax(return_result[:, 1]), 0]
-    depth_np = np.asarray(depth_np + best_depth, dtype=np.uint16)
+    '''
+    analyzing
+    '''
+    if analyzing:
 
-    # Masking
-    color_np, depth_np = masking(color_np, depth_np, seg_folder[0], segment_IDs)    
-    pcd = create_pcd(depth_np, color_np, intr_coeffs)
+        inputfiles = os.listdir(rescape_output)
+        imagefiles = [filename for filename in inputfiles if filename.endswith('.jpg')]
+        imagefiles.sort()
+        mapfiles = [filename for filename in inputfiles if filename.endswith('.txt')]
+        maskfile = [filename for filename in inputfiles if filename.endswith('mask.csv')]
+        cpfile = [filename for filename in inputfiles if filename.endswith('compression_factors.csv')]
+        rafile = [filename for filename in inputfiles if filename.endswith('rotation_angles.csv')]
+        
+        # for mapfile in mapfiles:
+        #     depth_map_array  = np.uint8(np.loadtxt(os.path.join(rescape_output, mapfile)))
+        #     depth_map = cv2.applyColorMap(depth_map_array, cv2.COLORMAP_INFERNO)
+        #     depth_map_grey = cv2.cvtColor(depth_map, cv2.COLOR_BGR2GRAY) 
+        #     cv2.imwrite((mapfile[:mapfile.rfind('.')] + '_color.png'), depth_map)
+        #     cv2.imwrite((mapfile[:mapfile.rfind('.')] + '_grey.png'), depth_map_grey)
 
-    present_pcd(pcd)
+        masks = pd.read_csv(os.path.join(rescape_output, maskfile[0]), header=None).to_numpy()
+        compression_factors = pd.read_csv(os.path.join(rescape_output, cpfile[0]), header=None).to_numpy()
+        rotation_angles = pd.read_csv(os.path.join(rescape_output, rafile[0]), header=None).to_numpy()
+        counter = 0
+        kurtosis_vals = []
+        maps = []
+        iteration = []
+        cf = []
+        ra = []
+        # down sample
+        for mapfile, mask, compression_factor, rotation_angle in zip(mapfiles, masks, compression_factors, rotation_angles):
+            counter += 1
+            if counter % 1 == 0:
+                depth_map = np.uint8(np.loadtxt(os.path.join(rescape_output, mapfile)))
+                trimmed_depth_map = trim_map(depth_map, mask)
 
-    compare_topdownview(pcd, color_image, Zack_img)
+                kurtosis_val = kurtosis(trimmed_depth_map)
 
-        # for  dist_imgplane2closeobj in tqdm(range(maximum_depth)):
-        #     # convert the relative distant from obj to image plane to relative distance to optical center
-        #     # depth_np = add_distance2image_plane(compression_factor, depth_np, intr_coeffs)
-        #     depth_np = np.asarray(depth_np + dist_imgplane2closeobj, dtype=np.uint16)
+                kurtosis_vals.append(kurtosis_val)
+                # maps.append(trimmed_depth_map_1d)
+                maps.append(trimmed_depth_map)
 
-        #     # Masking
-        #     color_np, depth_np = masking(color_np, depth_np, seg_folder[0], segment_IDs)
+                iteration.append(counter)
+                cf.append(compression_factor[0])
+                ra.append(rotation_angle[0])
 
-        #     #########debug code start###################    
-        #     # depth_np = smooth_depth(depth_np)
-        #     #########debug code end#####################
-
-        #     # Create Open3D Image objects
-        #     color_o3d = o3d.geometry.Image(color_np)
-        #     depth_o3d = o3d.geometry.Image(depth_np)
-
-        #     #########debug code start###################    
-        #     # vis = o3d.visualization.Visualizer()
-        #     # vis.create_window("Depth Map Visualization", width=4000, height=3000)
-
-        #     # # Add depth image to the visualizer
-        #     # vis.add_geometry(depth_o3d)
-
-        #     # # Run the visualizer
-        #     # vis.run()
-
-        #     # # Destroy the window after the visualization
-        #     # vis.destroy_window()
-        #     #########debug code end#######################    
-
-        #     # Create an RGBDImage object
-        #     rgbd_image = o3d.geometry.RGBDImage.create_from_color_and_depth(
-        #         color_o3d, depth_o3d, depth_scale = depth_sf, depth_trunc= 255, convert_rgb_to_intensity=False)
-        #     height, width = color_np.shape[:2]
-            
-        #     intrinsic = o3d.camera.PinholeCameraIntrinsic(width, height, intr_coeffs[0][0], intr_coeffs[1][1], intr_coeffs[0][2], intr_coeffs[1][2])
-        #     # Define the extrinsic matrix
-        #     # HOLD
-        #     extrinsic = np.eye(4)
-
-        #     # Create point cloud from RGBD image
-        #     pcd = o3d.geometry.PointCloud.create_from_rgbd_image(
-        #     rgbd_image, intrinsic, extrinsic)
-        #     pcd.transform([[1, 0, 0, 0], [0, -1, 0, 0], [0, 0, -1, 0], [0, 0, 0, 1]])
-        #     # Create coordinate axes geometry
-        #     axes = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.01, origin=[0, 0, 0])
-        #     axes.transform([[1, 0, 0, 0], [0, -1, 0, 0], [0, 0, -1, 0], [0, 0, 0, 1]])
-        #     # o3d.visualization.draw_geometries([pcd, axes])
-
-        #     # Create top down view
-        #     grayA  = topdownview(pcd, color_image)
-        #     target_image = Image.open(Zack_img).convert('RGB')  # Convert to RGB if needed
-        #     target_image = np.array(target_image)
-        #     grayB = cv2.cvtColor(target_image, cv2.COLOR_RGB2BGR)
-        #     grayB = cv2.cvtColor(grayB, cv2.COLOR_BGR2GRAY)
-        #     simcheck(grayA, grayB)
-
-        #     # project_to_image(pcd, intrinsic)
-        #     dist_imgplane2closeobj += 50
-        #     # print(dist_imgplane2closeobj)
+        present_kurtosis(kurtosis_vals, maps, iteration, cf, ra)
 
 if __name__ == '__main__':
-    main()
+    preprocessing = False
+    loading= True
+    processing = True
+    presenting = True
+    analyzing = False
+    main(preprocessing, loading, processing, presenting, analyzing)
