@@ -153,7 +153,7 @@ def  simcheck(grayA, grayB, Zack_top_source_y):
     # Optionally, save the cropped image
     print("SSIM: {}".format(score))
     cv2.imwrite('./cropped_grayA_{:.5f}.jpg'.format(score), grayA_cropped)
-    # cv2.imwrite('./grayB.jpg', grayB)
+    cv2.imwrite('./grayB.jpg', grayB)
 
     return score
 
@@ -178,6 +178,8 @@ def depth_bruteforce(color_np, depth_np, maximum_depth, color_image, target_img,
             grayB = cv2.cvtColor(target_image, cv2.COLOR_RGB2BGR)
             grayB = cv2.cvtColor(grayB, cv2.COLOR_BGR2GRAY)
             score = simcheck(grayA, grayB, Zack_top_source_y)
+            # simcheck_v2(grayA, grayB)
+
             return_result.append((dist_imgplane2closeobj, score))
             print(f"\nDistance to image plane: {dist_imgplane2closeobj} ")
             pbar.update(1)
@@ -330,6 +332,45 @@ def compare_topdownview(pcd, color_image, Zack_img):
     # # Close the visualizer
     # vis.destroy_window()
 
+def simcheck_v2(grayA, grayB):
+
+    # Get the dimensions of both images
+    heightA, widthA = grayA.shape
+    heightB, widthB = grayB.shape
+
+    # Calculate the cropping coordinates
+    crop_y = (heightA - heightB) // 2
+    crop_x = (widthA - widthB) // 2
+
+    # Ensure the coordinates are within bounds
+    crop_y = max(crop_y, 0)
+    crop_x = max(crop_x, 0)
+
+    # Crop grayA to the dimensions of grayB
+    grayA_cropped = grayA[crop_y:crop_y + heightB, crop_x:crop_x + widthB]
+
+    # Compute the absolute difference between the two images
+    difference = cv2.absdiff(grayA_cropped, grayB)
+
+    # Display the images and the difference
+    plt.figure(figsize=(12, 8))
+
+    plt.subplot(1, 3, 1)
+    plt.title('Original Image')
+    plt.imshow(grayB)
+    plt.axis('off')
+
+    plt.subplot(1, 3, 2)
+    plt.title('Distorted Image')
+    plt.imshow(grayA)
+    plt.axis('off')
+
+    plt.subplot(1, 3, 3)
+    plt.title('Difference')
+    plt.imshow(difference)
+    plt.axis('off')
+
+    plt.show()
 '''
 ~~~ dead code ~~~
 '''
