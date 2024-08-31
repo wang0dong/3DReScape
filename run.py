@@ -1,6 +1,6 @@
 """
 Author: WANG Dong
-Date: 20240713
+Date: 20240818
 """
 from shelldepthanything import *
 from shellsegmentanything import *
@@ -12,13 +12,14 @@ import numpy as np
 import open3d as o3d
 import pandas as pd
 from scipy.stats import kurtosis
+import fnmatch
 
 GREEN = '\033[92m'
 ORANGE = '\033[38;5;208m'
 RED = '\033[91m'
 RESET = '\033[0m'
 
-def main(preprocessing, loading, processing, presenting, analyzing):
+def main(preprocessing, preloading, processing, presenting, analyzing):
     '''
     Parameters
     '''
@@ -27,21 +28,12 @@ def main(preprocessing, loading, processing, presenting, analyzing):
     img_path='./assets/examples'
     depth_output='./depth_vis'
     segments_output = './segment_vis'
-    Zack_img = './assets/transformed_TMFM0126.JPG'
     rescape_output = './rescape_vis'
+    # depth parameters
     maximum_depth = 500 # maximum relative distance from camera to the closest obj in 3D model 8192
+    step_size = 100 # step size in brute force search
     # 0 - 254 object segment ID, 255 background ID, 256 full image
-    segment_IDs = [256]  # 3
-    Target_compression_factor = 0.315
-    # the output from ReScape 
-    # {TMFM0126.JPG, 0.315, 1088}, 
-    # {PB210074.JPG, 0.295}, 
-    # {TMFM0037.JPG, 0.295}, 
-    # {P1010150.JPG, 0.25}, 
-    # {TMFM0154.JPG, 0.26}, 
-    # {TMFM0128.JPG, 0.38},
-    # {TMFM0154.JPG, 0.35},
-
+    segment_IDs = [256] 
     '''
     pre-processing
     create the depth file and segment masks
@@ -49,15 +41,14 @@ def main(preprocessing, loading, processing, presenting, analyzing):
     if preprocessing:
         # Generate image's depth map file
         deepit()
+        # deepit(img_path='./rescape_vis', outdir='./rescape_vis', encoder= 'vitl')
         # Generate image's segment mask
         segit()
-        
-        deepit(img_path='./rescape_vis', outdir='./rescape_vis', encoder= 'vitl')
 
     '''
-    loading
+    pre-loading
     '''
-    if loading:
+    if preloading:
         # image files
         if os.path.isfile(img_path):
             filenames = [img_path]
@@ -98,63 +89,80 @@ def main(preprocessing, loading, processing, presenting, analyzing):
                 print(f"{RED} multi depth files are found.{RESET}")    
             # load segment folder
             seg_folder = [s for s in segfolders if imgID in s]
+            # load target compression factor
+            rescape_output_folder = rescape_output + '\\' + imgID
+            inputfiles = os.listdir(rescape_output_folder)
+            pattern = 'compression_factor*.txt'
+            matching_file = [file_name for file_name in inputfiles if fnmatch.fnmatch(file_name, pattern)]
+            with open(os.path.join(rescape_output_folder, matching_file[0]), 'r') as file:
+                content = file.read()
+                Target_compression_factor = float(content)
+
             # Convert the images to NumPy arrays
             color_np = np.asarray(color_image, dtype=np.uint8)
             depth_map_array  = np.loadtxt(depth_file[0])
             depth_np = np.asarray(depth_map_array, dtype=np.uint16)
-
-            # # Plot the depth map
-            # plt.imshow(depth_np, cmap='viridis', interpolation='none')
-            # plt.show()
-
             # inverse the depth value
             depth_np = np.max(depth_np) - depth_np
 
             # distance regression
-            return_result = depth_bruteforce(color_np, depth_np, maximum_depth, color_image, intr_coeffs)
+            return_result, depth_range = depth_bruteforce(color_np, depth_np, maximum_depth, step_size, intr_coeffs)
             return_result = np.array(return_result)
 
             '''
             presenting
             '''
             if presenting:
+                # present the previous step brute force search result
                 present_bf_result(return_result, Target_compression_factor, imgID)
-                # best_depth = return_result[np.argmax(return_result[:, 1]), 0] # best_depth = 180
-                best_depth = return_result[find_closest_index(return_result, Target_compression_factor), 0]
+                # present_bf_result_depth_range(depth_range, step_size)
 
+                # optimized depth value
+                best_depth = return_result[find_closest_index(return_result, Target_compression_factor), 0]
+                # update the depth mape
                 depth_np = np.asarray(depth_np + best_depth, dtype=np.uint16)
 
                 # Masking
                 # color_np, depth_np = masking(color_np, depth_np, seg_folder[0], segment_IDs)    
 
+                # create pcd
                 pcd = create_pcd(depth_np, color_np, intr_coeffs, maximum_depth)
-                present_pcd(pcd)
 
-                # pcd_rotated_transformed, rotation_matrix = rotate_camera(pcd)
+                # rotate the camera to top of the pcd
+                # pcd_rotated_transformed, _ = rotate_camera(pcd)
+                # topdownview(pcd_rotated_transformed)
+                # collapse_pcd(pcd_rotated_transformed)
 
-                # compare_topdownview(pcd, color_image, Zack_img)
-                
-                # # create top down view
-                # combined_array = inverse_project(depth_np, color_np, rotation_matrix)
-                # project_top_view(combined_array)
+                # present the pcd created with optimized depth value
+                # present_pcd(pcd)
 
-                # Load a point cloud from a PLY file
-
-                present_pcd_series()
+                # Load a point cloud from a PLY file and present series
+                # present_pcd_series()
     
     '''
     analyzing
     '''
     if analyzing:
-
-        inputfiles = os.listdir(rescape_output)
+        # analysis the image depth kurtosis value
+        # load the rescape output files of rescape step 6 Brute Force Inverse Perspective Mapping
+        _, file_with_extension = os.path.split(filenames[0])
+        file_name, _ = os.path.splitext(file_with_extension)
+        imgID = file_name
+        rescape_output_folder = rescape_output + '\\' + imgID
+        inputfiles = os.listdir(rescape_output_folder)
+        # load image of each compression iteration 
         imagefiles = [filename for filename in inputfiles if filename.endswith('.jpg')]
         imagefiles.sort()
-        mapfiles = [filename for filename in inputfiles if filename.endswith('.txt')]
+        # load depth file of each compression iteration
+        mapfiles = [filename for filename in inputfiles if filename.endswith('depth.txt')]
+        # load destination points of each compression iteration
         maskfile = [filename for filename in inputfiles if filename.endswith('mask.csv')]
+        # load compression factor of each compression iteration
         cpfile = [filename for filename in inputfiles if filename.endswith('compression_factors.csv')]
+        # load rotation angle of each compression iteration
         rafile = [filename for filename in inputfiles if filename.endswith('rotation_angles.csv')]
         
+        # dead code, no need to create the depth color and grey images
         # for mapfile in mapfiles:
         #     depth_map_array  = np.uint8(np.loadtxt(os.path.join(rescape_output, mapfile)))
         #     depth_map = cv2.applyColorMap(depth_map_array, cv2.COLORMAP_INFERNO)
@@ -162,26 +170,29 @@ def main(preprocessing, loading, processing, presenting, analyzing):
         #     cv2.imwrite((mapfile[:mapfile.rfind('.')] + '_color.png'), depth_map)
         #     cv2.imwrite((mapfile[:mapfile.rfind('.')] + '_grey.png'), depth_map_grey)
 
-        masks = pd.read_csv(os.path.join(rescape_output, maskfile[0]), header=None).to_numpy()
-        compression_factors = pd.read_csv(os.path.join(rescape_output, cpfile[0]), header=None).to_numpy()
-        rotation_angles = pd.read_csv(os.path.join(rescape_output, rafile[0]), header=None).to_numpy()
+        masks = pd.read_csv(os.path.join(rescape_output_folder, maskfile[0]), header=None).to_numpy()
+        compression_factors = pd.read_csv(os.path.join(rescape_output_folder, cpfile[0]), header=None).to_numpy()
+        rotation_angles = pd.read_csv(os.path.join(rescape_output_folder, rafile[0]), header=None).to_numpy()
+
+        # initialize
         counter = 0
         kurtosis_vals = []
         maps = []
         iteration = []
         cf = []
         ra = []
-        # down sample
+        # down sample factor
+        downsample_factor = 1
+
         for mapfile, mask, compression_factor, rotation_angle in zip(mapfiles, masks, compression_factors, rotation_angles):
             counter += 1
-            if counter % 1 == 0:
-                depth_map = np.uint8(np.loadtxt(os.path.join(rescape_output, mapfile)))
+            if counter % downsample_factor == 0:
+                depth_map = np.uint8(np.loadtxt(os.path.join(rescape_output_folder, mapfile)))
+                # trim depth map
                 trimmed_depth_map = trim_map(depth_map, mask)
-
+                # calculate kurtosis value
                 kurtosis_val = kurtosis(trimmed_depth_map)
-
                 kurtosis_vals.append(kurtosis_val)
-                # maps.append(trimmed_depth_map_1d)
                 maps.append(trimmed_depth_map)
 
                 iteration.append(counter)
@@ -192,8 +203,8 @@ def main(preprocessing, loading, processing, presenting, analyzing):
 
 if __name__ == '__main__':
     preprocessing = False
-    loading= True
+    preloading= True
     processing = True
-    presenting = True
-    analyzing = False
-    main(preprocessing, loading, processing, presenting, analyzing)
+    presenting = False
+    analyzing = True
+    main(preprocessing, preloading, processing, presenting, analyzing)
